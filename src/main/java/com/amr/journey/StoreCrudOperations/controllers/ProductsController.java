@@ -1,0 +1,206 @@
+package com.amr.journey.StoreCrudOperations.controllers;
+
+import com.amr.journey.StoreCrudOperations.entity.Product;
+import com.amr.journey.StoreCrudOperations.entity.ProductDTO;
+import com.amr.journey.StoreCrudOperations.services.ProductsRepository;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.util.Date;
+import java.util.List;
+
+@Controller
+@RequestMapping("")
+public class ProductsController {
+    @Autowired
+    private ProductsRepository productsRepository;
+
+    @Autowired
+    public ProductsController(ProductsRepository productsRepository) {
+        this.productsRepository = productsRepository;
+    }
+
+    @GetMapping("/products")
+    public String showProducts(Model model) {
+        List<Product> products = productsRepository.findAll();
+        model.addAttribute("products", products);
+        return "products";
+    }
+
+    @GetMapping("/create")
+    public String createProduct(Model model) {
+        ProductDTO product = new ProductDTO();
+        model.addAttribute("product", product);
+        return "create";
+    }
+
+    @PostMapping("/creating")
+    public String creating(
+            @Valid @ModelAttribute("product") ProductDTO productDTO,
+            BindingResult result,Model model
+    ) throws IOException {
+        if(productDTO.getImageFileName().isEmpty()) {
+            result.addError(new FieldError("product","imageFileName","The image file is required"));
+        }
+        if(result.hasErrors()){
+            model.addAttribute("product", productDTO);
+            return "create";
+        }
+
+        MultipartFile image = productDTO.getImageFileName();
+        Date createdAt = new Date();
+        String storageImageFileName = createdAt.getTime() + image.getOriginalFilename();
+        try {
+            String uploadDir = "public/images/";
+            Path uploadPath = Paths.get(uploadDir);
+            if(!Files.exists(uploadPath)) {
+                Files.createDirectories(uploadPath);
+            }
+            try (InputStream inputStream = image.getInputStream()) {
+                Files.copy(inputStream,Paths.get(uploadDir + storageImageFileName), StandardCopyOption.REPLACE_EXISTING);
+
+            } catch (IOException e) {
+                System.out.println("Exception: " + e.getMessage());
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        Product product = new Product();
+        product.setName(productDTO.getName());
+        product.setBrand(productDTO.getBrand());
+        product.setPrice(productDTO.getPrice());
+        product.setDescription(productDTO.getDescription());
+        product.setImageFileName(storageImageFileName);
+        product.setCreatedDate(createdAt);
+        productsRepository.save(product);
+        return "redirect:/products";
+    }
+
+
+
+    ///////////////////////////////
+    @GetMapping("/products/{id}/edit")
+    public String editProduct(Model model , @PathVariable("id") int id) {
+
+        try {
+        Product product = productsRepository.findById(id).get();
+        model.addAttribute("product", product);
+        ProductDTO productDTO = new ProductDTO();
+        productDTO.setName(product.getName());
+        productDTO.setBrand(product.getBrand());
+        productDTO.setPrice(product.getPrice());
+        productDTO.setDescription(product.getDescription());
+        productDTO.setImageFileNameString(product.getImageFileName());
+        model.addAttribute("productDTO", productDTO);////
+        } catch (Exception e) {
+            System.out.println("Exception: " + e.getMessage());
+            return "redirect/products";
+        }
+
+        return "editProducts";
+    }
+
+@PostMapping("/products/{id}/edit")
+public String updateProduct(
+        Model model,
+        @PathVariable("id") int id,
+        @Valid @ModelAttribute() ProductDTO productDTO,
+        BindingResult result
+) throws IOException {
+    Product product = productsRepository.findById(id).orElse(null);
+
+    if (product == null) {
+        model.addAttribute("error", "Product not found.");
+        return "editProducts";
+    }
+
+    model.addAttribute("product", product);
+
+    if (result.hasErrors()) {
+        // Keep showing the original image when returning to the form
+        productDTO.setImageFileNameString(product.getImageFileName());
+        return "editProducts";
+    }
+
+    MultipartFile newImage = productDTO.getImageFileName();
+    if (newImage != null && !newImage.isEmpty()) {
+        String uploadDir = "public/images/";
+        Date createdAt = new Date();
+        String storageImageFileName = createdAt.getTime() + newImage.getOriginalFilename();
+
+        // Try saving the new image
+        try (InputStream inputStream = newImage.getInputStream()) {
+            Files.copy(inputStream, Paths.get(uploadDir + storageImageFileName), StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            System.out.println("Error copying image: " + e.getMessage());
+            model.addAttribute("error", "Failed to upload the image. Please check the file format or size.");
+            productDTO.setImageFileNameString(product.getImageFileName()); // preserve image in form
+            return "editProducts";
+        }
+
+        // Only delete old image if the new one was saved successfully
+        Path oldImagePath = Paths.get(uploadDir + product.getImageFileName());
+        try {
+            Files.deleteIfExists(oldImagePath);
+        } catch (IOException e) {
+            System.out.println("Error deleting old image: " + e.getMessage());
+            model.addAttribute("error", "Failed to delete the old image. Please try again.");
+            return "editProducts";
+        }
+
+        product.setImageFileName(storageImageFileName); // update image file name
+    }
+    // If no new image uploaded: keep the existing one (do nothing)
+
+    // Update other fields
+    try {
+        product.setName(productDTO.getName());
+        product.setBrand(productDTO.getBrand());
+        product.setPrice(productDTO.getPrice());
+        product.setDescription(productDTO.getDescription());
+
+        productsRepository.save(product);
+    } catch (Exception e) {
+        System.out.println("Error saving product: " + e.getMessage());
+        model.addAttribute("error", "Failed to update the product details. Please try again.");
+        productDTO.setImageFileNameString(product.getImageFileName());
+        return "editProducts";
+    }
+
+    return "redirect:/products";
+}
+
+    @GetMapping("/products/{id}/delete")
+    public String deleteProduct(@PathVariable("id") int id) {
+        Product product = productsRepository.findById(id).get();
+        Path imagePath = Paths.get("public/images/" + product.getImageFileName());
+        try {
+            Files.deleteIfExists(imagePath);
+        } catch (IOException e) {
+            System.out.println("Error deleting image: " + e.getMessage());
+        }
+        productsRepository.delete(product);
+        return "redirect:/products";
+    }
+
+
+
+}
+
+
+
+
+
+
